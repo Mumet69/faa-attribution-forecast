@@ -1,41 +1,45 @@
-# polymarket-faa-attribution-02 — FAA outage attribution forecaster
+# FAA Attribution Forecaster — Round 2
 
-Entry for make.fun competition `polymarket-faa-attribution-02`: forecast the
-Yes price of every market of Polymarket's FAA outage attribution family at
-every minute of the 4 hours after each checkpoint, as five quantiles
-(5%, 25%, 50%, 75%, 95%) per market per minute.
+Entry for make.fun `polymarket-faa-attribution-02`: forecast Polymarket's
+FAA outage attribution prices minute by minute, 4 hours ahead.
 
-## How it works
+## Model
 
-`main.py` (Python 3.13, stdlib only, no network) is an empirical-quantile
-forecaster in the NVIDIA round-3 design:
+Python 3.13, stdlib only, deterministic. For each market, `main.py`
+forecasts 5 quantiles (5/25/50/75/95%) for each of the 240 minutes after
+the checkpoint, from empirical h-step return quantiles over the last
+480 minutes at 15 horizons, interpolated in log(h):
+
+- median recentered on the last price (persistence; drift extrapolation
+  was tested and hurts), k = 0.45 mid / 0.9 tails, upside ×0.75 /
+  downside ×1.5, mean-based volatility regime, tail shrinkage 0.2,
+  constant jump reversion (frac 0.3);
+- sum normalisation toward **S0**, the in-case sum of last prices
+  (NOT 1.0 — the 4 FAA markets leave a large "none" mass; the live
+  sum is ~0.095, so pulling to 1.0 would multiply every median ~10×).
+
+## Round-2 changes (practice mean 0.278826 → 0.264150, −5.3%)
+
+1. **Parametric tail blend (0.75):** empirical quantiles blended 75%
+   toward normal quantiles centred on the empirical median, sigma from
+   the empirical IQR / 1.349. The 5%/95% empirical quantiles from 480
+   overlapping samples are noisy; the blend stabilises them.
+2. **Recency weighting:** return history weighted by 0.5^(age/300 min),
+   so quantiles adapt faster to regime changes.
+3. **Scale-aware jump detection:** a move counts as a jump if large
+   absolutely (>0.02) OR large relative to the price (>25% of it), so
+   jump reversion actually fires on the tiny FAA prices (0.006–0.037),
+   where a −50% crash is only ~0.01 in absolute terms.
+4. Small median trend term (weight 0.1 on the last-30-min move, capped
+   at h=30) and a wider volatility-regime clip [0.6, 1.8].
+
+## Running
 
 ```
-q_tau(h) = x + k_tau * (emp_q_tau(h) - emp_q_50(h))
+python3 main.py   # reads $MAKEFUN_INPUT_DIR (default /input),
+                  # writes one <id>.out per <id>.in to $MAKEFUN_OUTPUT_DIR
 ```
 
-- Empirical h-step return quantiles over the last 480 minutes, at horizons
-  {1, 2, 3, 4, 6, 9, 13, 19, 28, 41, 60, 87, 126, 183, 240}, interpolated
-  in log(h); median recentered to the last price.
-- k = 0.45 for middle quantiles, 0.9 for tails; upside deviations x0.75,
-  downside x1.5.
-- Mean-based volatility regime scaling, tail shrinkage, and jump reversion
-  (constant mode) for large last-minute moves.
-- Sum normalisation toward S0, the in-case sum of last prices (not 1.0:
-  the 4 FAA markets leave a large "none" mass), ramped over 120 minutes.
-- All quantiles clamped to [0, 1] and sorted monotone.
-
-## Run
-
-```sh
-MAKEFUN_INPUT_DIR=/path/to/input MAKEFUN_OUTPUT_DIR=/path/to/output \
-  python3 main.py
-```
-
-Reads one `<case>.in` per case, writes `<case>.out` per case.
-Deterministic: two runs produce byte-identical output.
-Practice (6 NVIDIA cases from the kit): mean pinball loss 0.278826.
-
-## License
-
-MIT © serli69 — see LICENSE.
+Local practice score (6 NVIDIA practice cases, local scorer):
+**mean pinball 0.264150** (p00 0.444954, p01 0.293494, p02 0.351577,
+p03 0.244675, p04 0.206793, p05 0.104588), ~0.25–0.35 s/case.
